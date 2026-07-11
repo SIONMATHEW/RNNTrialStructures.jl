@@ -1225,7 +1225,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
         # digitize central gaze
         gg = dropdims(mean(reshape(gaze[:,1], 2, 16)[:,8:9],dims=2),dims=2)
         gidx = assign_surface_bin(gg...,arena;binsize=binsize,binsize_wall=binsize_wall)[3]
-        _pidx,pidx = assign_bin(position[:,1]...,arena;binsize=binsize)
+        _, _, pidx = assign_bin(position[:,1]..., arena; binsize=binsize)
         conjunction[gidx,pidx,1] = T(0.8)
         gazem[:,1] = gg
     end
@@ -1265,7 +1265,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
             end
             gg = dropdims(mean(reshape(gaze[:,k], 2, 16)[:,8:9],dims=2),dims=2)
             _,dm, gidx = assign_surface_bin(gg...,arena;binsize=binsize,binsize_wall=binsize_wall)
-            _pidx,pidx = assign_bin(position[:,k]...,arena;binsize=binsize)
+            _, _, pidx = assign_bin(position[:,k]..., arena; binsize=binsize)
             # convert to linear index
             if gidx > n_gaze_bins
                 @show dm
