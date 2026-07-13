@@ -487,17 +487,30 @@ function get_head_direction(Δθ::T;rng=Random.default_rng()) where T <: Real
     rand(rng, [-Δθ, zero(T), Δθ])
 end
 
-function get_head_direction(Δθ::T,θ::T;rng=Random.default_rng(),p_stay::T=T(0.5)) where T <: Real
-    pp = cumsum([(1 - p_stay)/2, p_stay, (1-p_stay)/2])
+function get_head_direction(
+    Δθ::T,
+    θ::T;
+    rng=Random.default_rng(),
+    p_stay::T=T(0.5)
+) where T <: Real
+
+    pp = cumsum([
+        (one(T) - p_stay) / T(2),
+        p_stay,
+        (one(T) - p_stay) / T(2)
+    ])
+
     cc = [-Δθ, zero(T), Δθ]
-    ii = 2 # stop gap; if for some reason the below fails, default to staying
-    for jj in 1:length(pp)
-        if rand(rng) < pp[jj]
-            ii = jj
-            break
+
+    u = rand(rng, T)
+
+    for jj in eachindex(pp)
+        if u < pp[jj]
+            return cc[jj]
         end
     end
-    cc[ii]
+
+    return cc[end]
 end
 
 struct ViewField{T<:Real}
