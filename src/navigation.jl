@@ -1257,7 +1257,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
         head_direction[:,k] = trial.angular_pref(θ)
         # get view angles
         if compute_view
-            _θq = get_view(position[:,k],θ, trial.arena;kwargs...)
+            _θq = get_view(position[:,k], θ, trial.arena; fov=fov, kwargs...)
             θq, posq = _θq
             for _θq in θq
                 viewf[:,k] .+= mean(trial.angular_pref(range(_θq[1], stop=_θq[2],length=10)),dims=2)
