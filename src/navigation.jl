@@ -1212,7 +1212,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
     head_direction[:,1] = trial.angular_pref(θ)
     inputs_outputs = union(trial.inputs, trial.outputs)
     compute_view = :view in inputs_outputs
-    compute_distance = (:distance in inputs_outputs) || (:texture in inputs_outputs) || (:gaze in inputs_outputs)
+    compute_distance = (:distance in inputs_outputs) || (:texture in inputs_outputs) || (:gaze in inputs_outputs) || (:conjunction in inputs_outputs)
 
     if compute_view
         θq,_ = get_view(position[:,1],θ, trial.arena;fov=fov,kwargs...)
