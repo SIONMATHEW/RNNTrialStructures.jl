@@ -429,18 +429,12 @@ function get_coordinate(i::Int64, j::Int64,arena::AbstractArena{T},θhd::T;Δθ:
         m[ii] = dx[1]*ps[1] + dx[2]*ps[2]
     end
     kk = findall(m.==maximum(m))
-    pp = p_hd
-    pq = T(1.0/(nsteps-length(kk)))
-    jj = 0
-    if rand(rng) < pp
-        jj = rand(rng,kk)
+    other_steps = setdiff(1:nsteps, kk)
+
+    if isempty(other_steps) || rand(rng) < p_hd
+        jj = rand(rng, kk)
     else
-        for (k,ii) in enumerate(setdiff(1:nsteps, kk))
-            if rand(rng) < k*pq 
-                jj = ii
-                break
-            end
-        end
+        jj = rand(rng, other_steps)
     end
     Δ = possible_steps[jj]
     (i,j) = (i+Δ[1], j+Δ[2])
