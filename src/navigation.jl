@@ -1217,7 +1217,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
     if compute_view
         θq,_ = get_view(position[:,1],θ, trial.arena;fov=fov,kwargs...)
         for _θq in θq
-            viewf[:,1] .= mean(trial.angular_pref(range(_θq[1], stop=_θq[2],length=10)),dims=2)
+            viewf[:,1] .+= mean(trial.angular_pref(range(_θq[1], stop=_θq[2],length=10)),dims=2)
         end
     end
     # use the full field of view here
