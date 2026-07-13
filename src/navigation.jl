@@ -1292,15 +1292,14 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
                 dm = dist[ii.I[1]+2, ii.I[2]] - dist[ii.I[1]+1, ii.I[2]]
                 dist[ii] = dist[ii.I[1]+1,ii.I[2]] - dm
                 # TODO: Do the same for gaze
-                dg = gaze[2*(ii2-1)+1:2*(ii2)] .- gaze[2*(ii1-1)+1:2*ii1]
+                dg = gaze[2*(ii2-1)+1:2*ii2, ii.I[2]] .- gaze[2*(ii1-1)+1:2*ii1, ii.I[2]]
                 gaze[2*(ii0-1)+1:2*ii0,ii.I[2]] = gaze[2*(ii1-1)+1:2*ii1, ii.I[2]] .- dg
             else
                 ii2  = ii.I[1]-1
                 ii1 = ii.I[1]-2
                 dm = dist[ii.I[1]-1, ii.I[2]] - dist[ii.I[1]-2, ii.I[2]]
                 dist[ii] = dist[ii.I[1]-1,ii.I[2]] + dm
-
-                dg = gaze[2*(ii2-1)+1:2*(ii2)] .- gaze[2*(ii1-1)+1:2*ii1]
+                dg = gaze[2*(ii2-1)+1:2*ii2, ii.I[2]] .- gaze[2*(ii1-1)+1:2*ii1, ii.I[2]]
                 gaze[2*(ii0-1)+1:2*ii0,ii.I[2]] = gaze[2*(ii1-1)+1:2*ii1, ii.I[2]] .+ dg
             end
         end
