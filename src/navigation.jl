@@ -594,7 +594,7 @@ function sort_inputs(::Union{Type{NavigationTrial}, Type{NavigationTrial{T}}}, i
 end
 
 function sort_outputs(::Type{NavigationTrial}, outputs)
-    ordered_outputs = [:position, :head_direction, :distance, :texture, :gaze, :conjuction]
+    ordered_outputs = [:position, :head_direction, :distance, :texture, :gaze, :conjunction]
     outputs = sort(outputs, by=x->findfirst(ordered_outputs.==x))
 end
 
@@ -1522,7 +1522,7 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     output[offset+1:offset+size(position,1), 1:size(position,2),i] .= position
                     offset += size(position,1)
                 end
-                if :head_direaction in trial.outputs
+                if :head_direction in trial.outputs
                     output[offset+1:offset+size(head_direction,1), 1:size(head_direction,2),i]  .= head_direction
                     offset += size(head_direction,1)
                 end
