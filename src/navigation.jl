@@ -1195,7 +1195,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
     ncols = round(Int64, arena.ncols*arena.colsize/binsize)
     nrows = round(Int64, arena.nrows*arena.rowsize/binsize)
     arena_diam = sqrt(sum(abs2, extent(arena)))
-    θf = range(zero(T), stop=T(2π), step=T(π/4))
+    θf = range(zero(T), step=T(π/4), length=8)
     nsteps = rand(rng, trial.min_num_steps:trial.max_num_steps)
     conjunction = fill(T(0.2), n_gaze_bins, n_place_bins, nsteps)
     position = zeros(T,2,nsteps)
