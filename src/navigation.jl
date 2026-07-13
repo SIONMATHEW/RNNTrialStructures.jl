@@ -1513,7 +1513,7 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     offset += size(texture,1)
                 end
                 if :gaze in trial.inputs
-                    input[offset+1:offset+size(gaze,1), 1:size(gaze,2),i] .= texture 
+                    input[offset+1:offset+size(gaze,1), 1:size(gaze,2),i] .= gaze 
                     offset += size(gaze,1)
                 end
 
