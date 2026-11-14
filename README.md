@@ -48,3 +48,32 @@ Other possible values for the outputs are `:position` and `:gaze`.
 
 ![Illustration of the four pillar maze](assets/default_arena_layout.png)
 Illustration of the default four pillar maze.
+
+### Reproducible navigation experiments
+
+Three named arena presets are available:
+
+```julia
+legacy = RNNTrialStructures.navigation_arena(:legacy_four_pillar)
+open = RNNTrialStructures.navigation_arena(:open)
+occluded = RNNTrialStructures.navigation_arena(:occluded)
+```
+
+`open` and `occluded` use the same four outer-wall textures. `occluded` adds
+four pillars with separate texture values. `legacy_four_pillar` preserves the
+original arena used by older experiments.
+
+Pass a separate seed for each data split. Setting `return_labels=true` adds
+integer place, surface and joint labels and physical coordinates without
+changing the legacy three-array return value used when it is false.
+
+```julia
+generator = RNNTrialStructures.generate_trials(
+    trialstruct, 256, 20.0f0;
+    rseed=10001,
+    binsize=2.0,
+    binsize_wall=5.0,
+    return_labels=true,
+)
+x, y, mask, labels = generator()
+```

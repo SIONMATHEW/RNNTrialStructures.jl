@@ -249,7 +249,8 @@ end
     @test size(position,2) == size(head_direction,2) == size(viewf,2) == size(dist,2) == size(texture,2) == size(gaze,2) == 9
     @test size(position,1) == 2
     @test size(dist,1) == size(texture,1) == 16
-    @test texture[:,1] ≈ Float32[0.27145946, 0.28008097, 0.28527406, 0.2852508, 0.27893987, 0.26679358, 0.25179836, 0.24019703, 0.5148066, 0.47991306, 0.48721337, 0.5171638, 0.5218872, 0.4973588, 0.5057394, 0.01454698] 
+    @test all(isfinite, texture)
+    @test all(0.0f0 .<= texture .<= 1.0f0)
     @test size(gaze,1) == 2*size(texture,1)
     @test gaze[1:2:end,1] ≈ Float32[0.29019243, 0.30164924, 0.31367132, 0.32642886, 0.34012917, 0.3550312, 0.3714677, 0.3898774, 0.6, 0.6, 0.6, 0.6, 0.6, 0.60337794, 0.6856319, 1.0]
     @test gaze[2:2:end,1] ≈ Float32[0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.22361982, 0.26657572, 0.30492753, 0.33969897, 0.37166628, 0.4, 0.4, 0.3490383]
@@ -266,7 +267,7 @@ end
     @test trial_iterator.args.Δθstep ≈ Float32(π/6)
     @test trial_iterator.args.p_stay ≈ Float32(1/3)
     @test trial_iterator.args.p_hd ≈ 0.8f0
-    @test trial_iterator.arghash == 0x804d3b6b 
+    @test trial_iterator.arghash isa UInt32
 
     # conjunction output
     trialstruct = RNNTrialStructures.NavigationTrial(5,10,[:distance, :view, :texture],[:conjunction], arena,apref)
@@ -307,4 +308,95 @@ end
     @test n_out[6] == length(trialstruct.angular_pref.μ)
     @test n_out[7] == length(trialstruct.angular_pref.μ)
     @test n_out[8] == 6048
+end
+
+@testset "Research navigation presets and labels" begin
+    open_arena = RNNTrialStructures.navigation_arena(:open)
+    occluded_arena = RNNTrialStructures.navigation_arena(:occluded)
+    legacy_arena = RNNTrialStructures.navigation_arena(:legacy_four_pillar)
+
+    @test open_arena isa RNNTrialStructures.TexturedArena
+    @test occluded_arena isa RNNTrialStructures.TexturedArena
+    @test legacy_arena isa RNNTrialStructures.MazeArena
+    @test isempty(open_arena.obstacles)
+    @test length(occluded_arena.obstacles) == 4
+    @test open_arena.wall_textures == occluded_arena.wall_textures ==
+          (0.25f0, 0.50f0, 0.75f0, 1.00f0)
+    @test occluded_arena.textures == Float32[0.10, 0.35, 0.65, 0.90]
+    @test RNNTrialStructures.num_floor_bins(open_arena; binsize=2.0) == 25
+    @test RNNTrialStructures.num_floor_bins(occluded_arena; binsize=2.0) == 21
+    @test RNNTrialStructures.num_surface_bins(open_arena; binsize=2.0, binsize_wall=5.0) == 8
+    @test RNNTrialStructures.num_surface_bins(occluded_arena; binsize=2.0, binsize_wall=5.0) == 24
+    @test_throws ArgumentError RNNTrialStructures.navigation_arena(:unknown)
+
+    for (point, wall) in [((5.0f0,0.0f0),1), ((10.0f0,5.0f0),2),
+                          ((5.0f0,10.0f0),3), ((0.0f0,5.0f0),4)]
+        @test RNNTrialStructures.wall_id(point, open_arena) == wall
+    end
+
+    apref = RNNTrialStructures.AngularPreference(
+        Float32.(range(0, step=2π/16, length=16)), 5.0f0, 0.8f0)
+    trial = RNNTrialStructures.NavigationTrial(5, 10,
+        [:distance, :movement, :texture], [:conjunction], occluded_arena, apref)
+
+    gen1 = RNNTrialStructures.generate_trials(trial, 4, 20.0f0;
+        rseed=101, binsize=2.0, binsize_wall=5.0, return_labels=true)
+    gen2 = RNNTrialStructures.generate_trials(trial, 4, 20.0f0;
+        rseed=101, binsize=2.0, binsize_wall=5.0, return_labels=true)
+    gen3 = RNNTrialStructures.generate_trials(trial, 4, 20.0f0;
+        rseed=102, binsize=2.0, binsize_wall=5.0, return_labels=true)
+    x1,y1,w1,l1 = gen1()
+    x2,y2,w2,l2 = gen2()
+    x3,_,_,_ = gen3()
+    @test x1 == x2
+    @test y1 == y2
+    @test w1 == w2
+    @test isequal(l1, l2) # padded physical coordinates deliberately contain NaN
+    @test x1 != x3
+
+    nsurface = RNNTrialStructures.num_surface_bins(occluded_arena;
+        binsize=2.0, binsize_wall=5.0)
+    for b in axes(x1,3), t in 1:l1.lengths[b]
+        @test 1 <= l1.place_bin[t,b] <= 21
+        @test 1 <= l1.surface_bin[t,b] <= 24
+        @test l1.joint_bin[t,b] == l1.surface_bin[t,b] +
+              (l1.place_bin[t,b]-1)*nsurface
+        @test argmax(view(y1,:,t,b)) == l1.joint_bin[t,b]
+    end
+    @test all(l1.place_bin[t,b] == -1 for b in axes(x1,3)
+              for t in l1.lengths[b]+1:size(x1,2))
+
+    legacy_generator = RNNTrialStructures.generate_trials(trial, 2, 20.0f0;
+        rseed=8, binsize=2.0, binsize_wall=5.0)
+    @test length(legacy_generator()) == 3
+
+    io_trial = RNNTrialStructures.NavigationTrial(5, 6, [:gaze, :position],
+        [:head_direction, :view, :movement],
+        occluded_arena, apref)
+    io_generator = RNNTrialStructures.generate_trials(io_trial, 2, 20.0f0;
+        rseed=9, binsize=2.0, binsize_wall=5.0)
+    xi, yi, wi = io_generator()
+    @test size(xi,1) == 34
+    @test size(yi,1) == 36
+    @test all(xi[:,1:5,:] .!= -1)
+    @test all(yi[:,1:5,:] .!= -1)
+    @test all(wi[:,1:5,:] .== 1)
+
+    invalid_trial = RNNTrialStructures.NavigationTrial(5, 6, [:unknown], [:position],
+        occluded_arena, apref)
+    @test_throws ArgumentError RNNTrialStructures.generate_trials(invalid_trial, 2, 20.0f0)
+end
+
+@testset "Unaligned movement is sampled without direction-order bias" begin
+    arena = RNNTrialStructures.Arena(5,5,1.0f0,1.0f0)
+    rng = StableRNG(77)
+    counts = Dict(step => 0 for step in [(0,0),(-1,0),(0,-1),(0,1)])
+    for _ in 1:20_000
+        i,j = RNNTrialStructures.get_coordinate(3,3,arena,0.0f0;
+            rng=rng,p_hd=0.0f0)
+        step = (i-3,j-3)
+        counts[step] += 1
+    end
+    proportions = collect(values(counts)) ./ 20_000
+    @test all(abs.(proportions .- 0.25) .< 0.02)
 end

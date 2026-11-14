@@ -104,18 +104,18 @@ function generate_trials(trialstruct::MultipleAngleTrial{T}, ntrials::Int64;rand
         for i in 1:ntrials
             trialid = get_trialid(trialstruct,_constraint_factor;rng=rng)
             if randomize_go_cue
-                _go_cue_onset = rand(round(Int64, go_cue_onset_min/dt):round(Int64,go_cue_onset_max/dt))
+                _go_cue_onset = rand(rng, round(Int64, go_cue_onset_min/dt):round(Int64,go_cue_onset_max/dt))
             else
                 _go_cue_onset = 0 
             end
             if randomize_stim_2
                 for j in 1:trialstruct.nangles
                     _step = round(Int64, stim_onset_step[j]/dt)
-                    stim_onset_Δ[j] = rand(round(Int64, stim_onset_min[j]/dt):_step:round(Int64,stim_onset_max[j]/dt))
+                    stim_onset_Δ[j] = rand(rng, round(Int64, stim_onset_min[j]/dt):_step:round(Int64,stim_onset_max[j]/dt))
                 end
             end
             if randomize_grace_period
-                _grace_period = rand(round(Int64, grace_period_min/dt):round(Int64, grace_period_max/dt))
+                _grace_period = rand(rng, round(Int64, grace_period_min/dt):round(Int64, grace_period_max/dt))
             else
                 _grace_period = round(Int64, grace_period_min/dt)
             end

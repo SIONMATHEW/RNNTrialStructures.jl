@@ -208,7 +208,7 @@ end
 
 function PositionPatternTrial(positions::Vector{Tuple{T, T}}, μ::Vector{Tuple{T, T}},σ::Vector{T};nsteps=100, go_cue_onset=50, target_onset=5, target_duration=5, go_cue_duration=5, kvs...) where T <: Real
     nlocations = length(μ)
-    target_input = zeros(t, nlocations, nsteps)
+    target_input = zeros(T, nlocations, nsteps)
     target_input[:,target_onset:target_onset+target_duration-1] .= one(T) 
     go_cue_input = zeros(T, 1, nsteps)
     go_cue_input[go_cue_onset:go_cue_onset+go_cue_duration-1] .= one(T)

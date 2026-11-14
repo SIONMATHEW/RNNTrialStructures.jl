@@ -24,12 +24,25 @@ struct TexturedArena{T<:Real} <: AbstractMazeArena{T}
     colsize::T
     rowsize::T
     obstacles::Vector{Vector{Tuple{Int64,Int64}}} # vector of vector of points defining the borders of the obstacles
-    textures::Vector{T}  # texture associated with each wall/obstacle
+    textures::Vector{T}  # one texture value per internal obstacle
+    wall_textures::NTuple{4,T} # bottom, right, top, left
+    texture_scale::T
 end
 
-function TexturedArena(arena, obstacles::Vector{Vector{Tuple{Int64, Int64}}}, texture_values::Vector{T}) where T <: Real
-    # one texture value per obstacle
-    TexturedArena{T}(arena.ncols, arena.nrows, arena.colsize, arena.rowsize, obstacles, texture_values)
+function TexturedArena(arena, obstacles::Vector{Vector{Tuple{Int64, Int64}}}, texture_values::Vector{T};
+                       wall_textures=ntuple(_ -> zero(T), 4), texture_scale=nothing) where T <: Real
+    length(texture_values) == length(obstacles) || throw(ArgumentError("one texture value is required per obstacle"))
+    walls = Tuple(T.(wall_textures))
+    length(walls) == 4 || throw(ArgumentError("four outer-wall texture values are required"))
+    all(isfinite, walls) && all(isfinite, texture_values) ||
+        throw(ArgumentError("texture values must be finite"))
+    all(x -> x >= zero(T), walls) && all(x -> x >= zero(T), texture_values) ||
+        throw(ArgumentError("texture values must be non-negative"))
+    max_texture = maximum(abs, [collect(walls); texture_values; zero(T)]) + T(0.2)
+    scale = isnothing(texture_scale) ? max(one(T), max_texture) : T(texture_scale)
+    scale >= max_texture || throw(ArgumentError("texture_scale must cover the configured texture range"))
+    TexturedArena{T}(arena.ncols, arena.nrows, arena.colsize, arena.rowsize,
+                     obstacles, texture_values, walls, scale)
 end
 
 function TexturedArena(arena::MazeArena{T}) where T <: Real
@@ -38,15 +51,64 @@ function TexturedArena(arena::MazeArena{T}) where T <: Real
 end
 
 function TexturedArena(arena::MazeArena{T}, texture_values::Vector{T}) where T <: Real
-    TexturedArena{T}(arena.ncols, arena.nrows, arena.colsize, arena.rowsize, arena.obstacles, texture_values)
+    TexturedArena(arena, arena.obstacles, texture_values)
 end
+
+function TexturedArena(arena::Arena{T}, texture_values::Vector{T}=T[];
+                       obstacles=Vector{Vector{Tuple{Int64,Int64}}}(), kwargs...) where T <: Real
+    TexturedArena(arena, obstacles, texture_values; kwargs...)
+end
+
+const DEFAULT_PILLARS = [[(3,3),(4,3),(4,4),(3,4)],
+                         [(7,3),(8,3),(8,4),(7,4)],
+                         [(7,7),(8,7),(8,8),(7,8)],
+                         [(3,7),(4,7),(4,8),(3,8)]]
+
+"""Return one of the versioned navigation arenas used by the experiments."""
+function navigation_arena(name::Symbol; wall_textures=nothing, pillar_textures=nothing)
+    base = Arena(10, 10, 1.0f0, 1.0f0)
+    if name == :legacy_four_pillar
+        isnothing(wall_textures) && isnothing(pillar_textures) ||
+            throw(ArgumentError("legacy_four_pillar has fixed legacy textures"))
+        return MazeArena()
+    elseif name == :open
+        isnothing(pillar_textures) || throw(ArgumentError("open arenas do not contain pillars"))
+        walls = isnothing(wall_textures) ?
+            (0.25f0, 0.50f0, 0.75f0, 1.00f0) : Tuple(Float32.(wall_textures))
+        return TexturedArena(base, Float32[];
+            wall_textures=walls)
+    elseif name == :occluded
+        walls = isnothing(wall_textures) ?
+            (0.25f0, 0.50f0, 0.75f0, 1.00f0) : Tuple(Float32.(wall_textures))
+        pillars = isnothing(pillar_textures) ?
+            Float32[0.10, 0.35, 0.65, 0.90] : Float32.(pillar_textures)
+        return TexturedArena(base, deepcopy(DEFAULT_PILLARS), pillars;
+            wall_textures=walls)
+    end
+    throw(ArgumentError("unknown arena preset: $name"))
+end
+
+function wall_id(point, arena::AbstractArena)
+    w, h = extent(arena)
+    x, y = point
+    isapprox(y, zero(y); atol=eps(typeof(y))*32) && return 1
+    isapprox(x, w; atol=eps(typeof(x))*32) && return 2
+    isapprox(y, h; atol=eps(typeof(y))*32) && return 3
+    isapprox(x, zero(x); atol=eps(typeof(x))*32) && return 4
+    throw(ArgumentError("point $point is not on an outer wall"))
+end
+
+texture_normalization(::Arena{T}) where T = one(T)
+texture_normalization(arena::MazeArena{T}) where T = max(one(T), T(length(arena.obstacles)) + T(0.2))
+texture_normalization(arena::TexturedArena) = arena.texture_scale
 
 function get_texture(pos::Vector{T}, θ::AbstractVector{T}, arena::TexturedArena{T}, θ0::T, fov::T) where T <: Real
     pp,dm,doid = get_obstacle_intersection(pos, θ, arena, θ0, fov)
     # oid returns a number whose 
     oid = round.(Int64, doid) 
     Δ = doid .- oid
-    doid .= Δ .+ [_oid > 0 ? arena.textures[_oid] : zero(T) for _oid in oid]
+    doid .= Δ .+ [_oid > 0 ? arena.textures[_oid] : arena.wall_textures[wall_id(_pp, arena)]
+                       for (_oid, _pp) in zip(oid, pp)]
     pp,dm,doid
 end
 
@@ -73,11 +135,7 @@ end
 Return a 10 × 10 grid arena with four obstacles
 """
 function MazeArena()
-    arena = RNNTrialStructures.MazeArena(10,10,1.0f0,1.0f0,
-                                          [[(3,3),(4,3),(4,4),(3,4)],
-                                          [(7,3),(8,3),(8,4),(7,4)],
-                                          [(7,7),(8,7),(8,8),(7,8)],
-                                          [(3,7),(4,7),(4,8),(3,8)]])
+    arena = RNNTrialStructures.MazeArena(10,10,1.0f0,1.0f0, deepcopy(DEFAULT_PILLARS))
     arena
 end
 
@@ -96,6 +154,14 @@ function signature(arena::MazeArena{T},h=zero(UInt32)) where T <: Real
             h = crc32c(string(ii), h)
         end
     end 
+    h
+end
+
+function signature(arena::TexturedArena{T}, h=zero(UInt32)) where T <: Real
+    for q in (arena.ncols, arena.nrows, arena.colsize, arena.rowsize,
+              arena.obstacles, arena.textures, arena.wall_textures, arena.texture_scale)
+        h = crc32c(string(q), h)
+    end
     h
 end
 
@@ -118,7 +184,7 @@ function assign_bin(x,y, arena::Arena;binsize=arena.colsize)
     j,i, (j-1)*arena.nrows + i
 end
 
-function assign_bin(x,y, arena::MazeArena;binsize=arena.colsize)
+function assign_bin(x,y, arena::AbstractMazeArena;binsize=arena.colsize)
     i = round(Int64, floor(y/binsize))+1
     j = round(Int64, floor(x/binsize))+1
     nn = num_floor_bins(arena;binsize=binsize)
@@ -170,7 +236,7 @@ function wall_bins(arena::AbstractArena)
     reverse(bins)
 end
 
-function surface_bins(arena::MazeArena)
+function surface_bins(arena::AbstractMazeArena)
     wbins = wall_bins(arena)
     for ob in arena.obstacles
         # TODO: Treat the sides differently
@@ -238,7 +304,7 @@ function num_floor_bins(arena::Arena;binsize=arena.colsize)
     nn = round(Int64, arena.ncols*arena.colsize*arena.nrows*arena.rowsize/binsize^2)
 end
 
-function num_floor_bins(arena::MazeArena;binsize=arena.colsize)
+function num_floor_bins(arena::AbstractMazeArena;binsize=arena.colsize)
     nn = round(Int64, arena.ncols*arena.colsize*arena.nrows*arena.rowsize/binsize^2)
     for pp in arena.obstacles
         nn -= round(Int64,length(pp)*arena.colsize*arena.rowsize/binsize^2)
@@ -338,7 +404,7 @@ function validate_step(i::Int64, j::Int64, vv::Vector{T}, arena::Arena{T}) where
     validate_step(i,j, Δi,Δj, arena)
 end
 
-function check_step(i::Int64, j::Int64, arena::MazeArena{T}) where T <: Real
+function check_step(i::Int64, j::Int64, arena::AbstractMazeArena{T}) where T <: Real
     in_any(x) = any([in(obstacle)(x) for obstacle in arena.obstacles]) # array of functions
     possible_steps = [(0,0)]
     if (i < arena.ncols) && !(in_any((i+1,j)))
@@ -356,7 +422,7 @@ function check_step(i::Int64, j::Int64, arena::MazeArena{T}) where T <: Real
     possible_steps
 end
 
-function validate_step(i::Int64, j::Int64, vv::Vector{T}, arena::MazeArena{T}) where T <: Real
+function validate_step(i::Int64, j::Int64, vv::Vector{T}, arena::AbstractMazeArena{T}) where T <: Real
     ss = [-1 1 0 0;
            0 0 -1 1]
     Δ = ss*vv
@@ -405,7 +471,7 @@ end
 get_obstacle_points(arena::Arena{T}) where T = Tuple{T,T}[]
 
 get_num_obstacles(arena::Arena) = 0
-get_num_obstacles(arena::MazeArena) = length(arena.obstacles)
+get_num_obstacles(arena::AbstractMazeArena) = length(arena.obstacles)
 
 """
     get_coordinate(i::Int64, j::Int64,arena::Arena{T};Δθ=π/4,rng=Random.default_rng()) where T <: Real
@@ -430,17 +496,12 @@ function get_coordinate(i::Int64, j::Int64,arena::AbstractArena{T},θhd::T;Δθ:
     end
     kk = findall(m.==maximum(m))
     pp = p_hd
-    pq = T(1.0/(nsteps-length(kk)))
-    jj = 0
+    alternatives = setdiff(1:nsteps, kk)
+    jj = first(kk)
     if rand(rng) < pp
         jj = rand(rng,kk)
-    else
-        for (k,ii) in enumerate(setdiff(1:nsteps, kk))
-            if rand(rng) < k*pq 
-                jj = ii
-                break
-            end
-        end
+    elseif !isempty(alternatives)
+        jj = rand(rng, alternatives)
     end
     Δ = possible_steps[jj]
     (i,j) = (i+Δ[1], j+Δ[2])
@@ -594,13 +655,13 @@ end
 get_name(::Type{NavigationTrial{T}}) where T <: Real = :NavigationTrial
 
 function sort_inputs(::Union{Type{NavigationTrial}, Type{NavigationTrial{T}}}, inputs) where T <: Real
-    ordered_inputs =  [:view, :head_direction, :movement, :distance, :texture]
+    ordered_inputs =  [:view, :head_direction, :movement, :position, :distance, :texture, :gaze]
     inputs = sort(inputs, by=x->findfirst(ordered_inputs.==x))
     inputs
 end
 
 function sort_outputs(::Type{NavigationTrial}, outputs)
-    ordered_outputs = [:position, :head_direction, :distance, :texture, :gaze, :conjuction]
+    ordered_outputs = [:position, :head_direction, :view, :movement, :distance, :texture, :gaze, :conjunction]
     outputs = sort(outputs, by=x->findfirst(ordered_outputs.==x))
 end
 
@@ -616,6 +677,10 @@ function Base.length(trial::NavigationTrial, input::Symbol)
         l = 16
     elseif input == :head_direction
         l = 16
+    elseif input == :position
+        l = 2
+    elseif input == :gaze
+        l = 32
     end
     l
 end
@@ -961,28 +1026,68 @@ Return true if the point `p` is within the view cone given by angle `theta` and 
     res
  end
 
+ """Exact forward-ray intersection with the rectangular outer boundary."""
+ function get_outer_wall_intersection(pos::Vector{T}, θ::T, arena::AbstractArena{T}) where T <: Real
+    w, h = extent(arena)
+    x, y = pos
+    dx, dy = cos(θ), sin(θ)
+    candidates = Tuple{T,Tuple{T,T}}[]
+    if dx < zero(T)
+        t = -x / dx
+        yh = y + t*dy
+        -eps(T)*32 <= yh <= h + eps(T)*32 && push!(candidates, (t, (zero(T), clamp(yh, zero(T), h))))
+    elseif dx > zero(T)
+        t = (w-x) / dx
+        yh = y + t*dy
+        -eps(T)*32 <= yh <= h + eps(T)*32 && push!(candidates, (t, (w, clamp(yh, zero(T), h))))
+    end
+    if dy < zero(T)
+        t = -y / dy
+        xh = x + t*dx
+        -eps(T)*32 <= xh <= w + eps(T)*32 && push!(candidates, (t, (clamp(xh, zero(T), w), zero(T))))
+    elseif dy > zero(T)
+        t = (h-y) / dy
+        xh = x + t*dx
+        -eps(T)*32 <= xh <= w + eps(T)*32 && push!(candidates, (t, (clamp(xh, zero(T), w), h)))
+    end
+    isempty(candidates) && error("forward ray did not intersect the arena boundary")
+    _, idx = findmin(first.(candidates))
+    t, point = candidates[idx]
+    px, py = point
+    perimeter = T(2)*(w+h)
+    d = if iszero(px)
+        h-py
+    elseif iszero(py)
+        h+px
+    elseif px == w
+        h+w+py
+    else
+        T(2)*h+T(2)*w-px
+    end
+    texture_component = T(0.1) + T(0.1)*sin(T(2π*5)*d/perimeter)
+    point, t, texture_component
+ end
+
  function get_obstacle_intersection(pos::Vector{T}, θ::AbstractVector{T}, arena::AbstractMazeArena{T},θ0::T, fov::T) where T <: Real
     # TODO Do distance to walls as well
     w,h = extent(arena)
     obstacle_points = get_obstacle_points(arena)
-    res = [inview(points, pos, θ0, fov) for points in obstacle_points]
-    wall_points = [(zero(T), zero(T)),(w, zero(T)), (w, h), (zero(T),h)]
     pps = Vector{Tuple{T,T}}(undef, length(θ))
     dms = zeros(T, length(θ))
     dbs = zeros(T,length(θ))
     oid = fill(0, length(θ))
 
     for (jj,_θ) in enumerate(θ)
-        pp,d_min,d_pp = get_intersection(pos, _θ, wall_points, θ0,fov)
-        for (ii,(rr,points)) in enumerate(zip(res, obstacle_points))
-            if any(rr)
-                _pp, _dm,_d_pp = get_intersection(pos, _θ, points, θ0,fov)
-                if _dm < d_min
-                    pp = _pp
-                    d_min = _dm
-                    d_pp = _d_pp
-                    oid[jj] = ii
-                end
+        pp,d_min,d_pp = get_outer_wall_intersection(pos, _θ, arena)
+        # Test every obstacle edge. Filtering only by visible vertices misses an
+        # obstacle whose edge crosses the view cone while its vertices lie outside it.
+        for (ii,points) in enumerate(obstacle_points)
+            _pp, _dm,_d_pp = get_intersection(pos, _θ, points, θ0,fov)
+            if _dm < d_min
+                pp = _pp
+                d_min = _dm
+                d_pp = _d_pp
+                oid[jj] = ii
             end
         end
         pps[jj] = pp
@@ -994,12 +1099,14 @@ Return true if the point `p` is within the view cone given by angle `theta` and 
 
  function get_obstacle_intersection(pos::Vector{T}, θ::AbstractVector{T}, arena::Arena{T},θ0::T,fov::T) where T <: Real
     w,h = extent(arena)
-    wall_points = [(zero(T), zero(T)),(w, zero(T)), (w, h), (zero(T),h)]
+    wall_points = [(zero(T), zero(T)), (w, zero(T)), (w, h), (zero(T), h)]
     pps = Vector{Tuple{T,T}}(undef, length(θ))
     dms = zeros(T, length(θ))
     dbs = zeros(T,length(θ))
     for (jj,_θ) in enumerate(θ)
-        pps[jj],dms[jj],dbs[jj] = get_intersection(pos, _θ, wall_points, θ0,fov)
+        # Preserve the established Arena calculation bit-for-bit. Maze arenas use
+        # the exact ray helper above so their wall identity is always well defined.
+        pps[jj],dms[jj],dbs[jj] = get_intersection(pos, _θ, wall_points, θ0, fov)
     end
     pps, dms, dbs
  end
@@ -1058,7 +1165,7 @@ Return true if the point `p` is within the view cone given by angle `theta` and 
     convert(Tuple{T,T}, pp), T(d_min),db 
  end
 
- function get_view(pos::Vector{T}, θ::T, arena::MazeArena{T};fov::T=T(π/2)) where T <: Real
+ function get_view(pos::Vector{T}, θ::T, arena::AbstractMazeArena{T};fov::T=T(π/2)) where T <: Real
     # check if any obstacle is in the view
     obstructed_angles = Tuple{T,T}[]
     #obstructed_points = Tuple{Tuple{T,T}, Tuple{T,T}}[]
@@ -1186,7 +1293,12 @@ Return true if the point `p` is within the view cone given by angle `theta` and 
     θs, obstructed_points_filtered
  end
 
-function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/4), p_stay=T(1/3), p_hd=T(1/4), fov=T(π/3), do_rescale=true, binsize=1.0, binsize_wall=binsize, kwargs...) where T <: Real
+function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/4), p_stay=T(1/3), p_hd=T(1/4), fov=T(π/3), do_rescale=true, binsize=1.0, binsize_wall=binsize, return_labels=false, kwargs...) where T <: Real
+    zero(T) <= p_stay <= one(T) || throw(ArgumentError("p_stay must be in [0, 1]"))
+    zero(T) <= p_hd <= one(T) || throw(ArgumentError("p_hd must be in [0, 1]"))
+    zero(T) < fov <= T(2π) || throw(ArgumentError("fov must be in (0, 2π]"))
+    binsize > 0 || throw(ArgumentError("binsize must be positive"))
+    binsize_wall > 0 || throw(ArgumentError("binsize_wall must be positive"))
     # random initiarange(-T(π), stop=T(π), step=π/4)li
     arena = trial.arena
     n_place_bins = num_floor_bins(arena;binsize=binsize) 
@@ -1207,6 +1319,9 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
     texture = zeros(T, 16, nsteps)
     gaze = zeros(T, 2*16, nsteps) # flat dimensions to be consistent with the rest of the code
     gazem = zeros(T, 2, nsteps) # mean gaze
+    place_bin = zeros(Int64, nsteps)
+    surface_bin = zeros(Int64, nsteps)
+    joint_bin = zeros(Int64, nsteps)
     # the estimate distance from the agent to each of the view points
     # if we are encoding distance like this, we need a way to indicate unknown distance for points 
     # not in view
@@ -1218,7 +1333,8 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
     head_direction[:,1] = trial.angular_pref(θ)
     inputs_outputs = union(trial.inputs, trial.outputs)
     compute_view = :view in inputs_outputs
-    compute_distance = (:distance in inputs_outputs) || (:texture in inputs_outputs) || (:gaze in inputs_outputs)
+    compute_distance = (:distance in inputs_outputs) || (:texture in inputs_outputs) ||
+                       (:gaze in inputs_outputs) || (:conjunction in inputs_outputs) || return_labels
 
     if compute_view
         θq,_ = get_view(position[:,1],θ, trial.arena;fov=fov,kwargs...)
@@ -1235,12 +1351,16 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
         for (j,_pp) in enumerate(xp)
             gaze[2*(j-1)+1:2*j,1] .= _pp
         end
-        # digitize central gaze
-        gg = dropdims(mean(reshape(gaze[:,1], 2, 16)[:,8:9],dims=2),dims=2)
+        # Use an exact central ray for the gaze label. The 16 sensory rays remain unchanged.
+        gaze_hit, _, _ = get_texture(position[:,1], T[θ], arena, θ, fov)
+        gg = collect(gaze_hit[1])
         gidx = assign_surface_bin(gg...,arena;binsize=binsize,binsize_wall=binsize_wall)[3]
         _, _, pidx = assign_bin(position[:,1]..., arena; binsize=binsize)
         conjunction[gidx,pidx,1] = T(0.8)
         gazem[:,1] = gg
+        place_bin[1] = pidx
+        surface_bin[1] = gidx
+        joint_bin[1] = gidx + (pidx-1)*n_gaze_bins
     end
     
     Δθ = T.([-Δθstep, zero(T), Δθstep])
@@ -1263,7 +1383,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
         head_direction[:,k] = trial.angular_pref(θ)
         # get view angles
         if compute_view
-            _θq = get_view(position[:,k],θ, trial.arena;kwargs...)
+            _θq = get_view(position[:,k],θ, trial.arena;fov=fov,kwargs...)
             θq, posq = _θq
             for _θq in θq
                 viewf[:,k] .+= mean(trial.angular_pref(range(_θq[1], stop=_θq[2],length=10)),dims=2)
@@ -1276,7 +1396,8 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
             for (jj,_pp) in enumerate(xp)
                 gaze[2*(jj-1)+1:2*jj,k] .= _pp
             end
-            gg = dropdims(mean(reshape(gaze[:,k], 2, 16)[:,8:9],dims=2),dims=2)
+            gaze_hit, _, _ = get_texture(position[:,k], T[θ], arena, θ, fov)
+            gg = collect(gaze_hit[1])
             _,dm, gidx = assign_surface_bin(gg...,arena;binsize=binsize,binsize_wall=binsize_wall)
             _, _, pidx = assign_bin(position[:,k]..., arena; binsize=binsize)
             # convert to linear index
@@ -1286,6 +1407,9 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
 
             conjunction[gidx,pidx,k] = T(0.8)
             gazem[:,k] = gg
+            place_bin[k] = pidx
+            surface_bin[k] = gidx
+            joint_bin[k] = gidx + (pidx-1)*n_gaze_bins
         end
     end
     if compute_distance
@@ -1298,7 +1422,7 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
                 dm = dist[ii.I[1]+2, ii.I[2]] - dist[ii.I[1]+1, ii.I[2]]
                 dist[ii] = dist[ii.I[1]+1,ii.I[2]] - dm
                 # TODO: Do the same for gaze
-                dg = gaze[2*(ii2-1)+1:2*(ii2)] .- gaze[2*(ii1-1)+1:2*ii1]
+                dg = gaze[2*(ii2-1)+1:2*(ii2),ii.I[2]] .- gaze[2*(ii1-1)+1:2*ii1,ii.I[2]]
                 gaze[2*(ii0-1)+1:2*ii0,ii.I[2]] = gaze[2*(ii1-1)+1:2*ii1, ii.I[2]] .- dg
             else
                 ii2  = ii.I[1]-1
@@ -1306,12 +1430,14 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
                 dm = dist[ii.I[1]-1, ii.I[2]] - dist[ii.I[1]-2, ii.I[2]]
                 dist[ii] = dist[ii.I[1]-1,ii.I[2]] + dm
 
-                dg = gaze[2*(ii2-1)+1:2*(ii2)] .- gaze[2*(ii1-1)+1:2*ii1]
+                dg = gaze[2*(ii2-1)+1:2*(ii2),ii.I[2]] .- gaze[2*(ii1-1)+1:2*ii1,ii.I[2]]
                 gaze[2*(ii0-1)+1:2*ii0,ii.I[2]] = gaze[2*(ii1-1)+1:2*ii1, ii.I[2]] .+ dg
             end
         end
     end
     # hack: because of finite precision, we sometimes get Infs in the distance. Use a crude interpolation for now
+    position_xy = copy(position)
+    gaze_xy = copy(gazem)
     #normalize position and gaze to the size of the maze 
     if do_rescale
         position ./= [trial.arena.ncols*trial.arena.colsize, trial.arena.nrows*trial.arena.rowsize]
@@ -1322,9 +1448,16 @@ function (trial::NavigationTrial{T})(;rng=Random.default_rng(),Δθstep::T=T(π/
         gazem .= 0.8*gazem .+ 0.05
 
 
-        texture ./= max(maximum(texture),1.0)
+        texture ./= texture_normalization(arena)
     end
     conjunction = reshape(conjunction, size(conjunction,1)*size(conjunction,2), size(conjunction,3))
+    if return_labels
+        return (position=position, head_direction=head_direction, view=viewf,
+                movement=movement, distance=dist, texture=texture, gaze_rays=gaze,
+                conjunction=conjunction, gaze=gazem, position_xy=position_xy,
+                gaze_xy=gaze_xy, place_bin=place_bin, surface_bin=surface_bin,
+                joint_bin=joint_bin)
+    end
     position, head_direction, viewf, movement, dist, texture, gaze, conjunction, gazem
 end
 
@@ -1470,18 +1603,31 @@ function performance(trialstruct::NavigationTrial{T}, output::Array{T,3}, output
     ppq./nq 
 end
 
-function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Random.default_rng(), rseed=1, hd_step=T(π/4), fov=T(π/2),p_stay=T(1/3), p_hd=T(1/4),binsize=trial.arena.colsize, binsize_wall=binsize) where T <: Real
+function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rseed=1,
+                         rng=Random.Xoshiro(rseed), hd_step=T(π/4), fov=T(π/2),
+                         p_stay=T(1/3), p_hd=T(1/4), binsize=trial.arena.colsize,
+                         binsize_wall=binsize, return_labels=false) where T <: Real
+    valid_inputs = Set([:view, :head_direction, :movement, :position, :distance, :texture, :gaze])
+    valid_outputs = Set([:position, :head_direction, :view, :movement, :distance,
+                         :texture, :gaze, :conjunction])
+    all(in(valid_inputs), trial.inputs) || throw(ArgumentError("unknown navigation input"))
+    all(in(valid_outputs), trial.outputs) || throw(ArgumentError("unknown navigation output"))
+    allunique(trial.inputs) || throw(ArgumentError("navigation inputs must be unique"))
+    allunique(trial.outputs) || throw(ArgumentError("navigation outputs must be unique"))
     Δθstep = T(hd_step)
     p_stay = T(p_stay)
     dt = T(dt)
     p_hd = T(p_hd)
     fov = T(fov)
     args = [(:ntrials, ntrials),(:dt, dt), (:rng, rng), (:rseed, rseed), (:Δθstep, Δθstep),
-            (:fov, fov),(:p_stay, p_stay),(:p_hd, p_hd),(:binsize,binsize),(:binsize_wall, binsize_wall)]
-    defaults = Dict{Symbol,Any}(:Δθstep=>T(π/4), :fov=>T(π/2),:p_stay=>T(1/3),:p_hd=>T(1/4), :binsize=>trial.arena.colsize, :binsize_wall=>trial.arena.colsize)
+            (:fov, fov),(:p_stay, p_stay),(:p_hd, p_hd),(:binsize,binsize),
+            (:binsize_wall, binsize_wall), (:return_labels, return_labels)]
+    defaults = Dict{Symbol,Any}(:Δθstep=>T(π/4), :fov=>T(π/2),:p_stay=>T(1/3),
+        :p_hd=>T(1/4), :binsize=>trial.arena.colsize,
+        :binsize_wall=>trial.arena.colsize, :return_labels=>false)
     h = signature(trial)
     for (k,v) in args
-        if !(k in keys(defaults)) || v != defaults[k]
+        if k != :rng && (!(k in keys(defaults)) || v != defaults[k])
             h = CRC32c.crc32c(string(v), h)
         end
     end
@@ -1495,8 +1641,36 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
             input = -1*ones(T, ninputs, max_nsteps, ntrials)
             output = -1*ones(T, noutputs, max_nsteps, ntrials)
             output_mask = zeros(T, noutputs, max_nsteps, ntrials)
+            place_bin = fill(-1, max_nsteps, ntrials)
+            surface_bin = fill(-1, max_nsteps, ntrials)
+            joint_bin = fill(-1, max_nsteps, ntrials)
+            position_xy = fill(T(NaN), 2, max_nsteps, ntrials)
+            gaze_xy = fill(T(NaN), 2, max_nsteps, ntrials)
+            lengths = zeros(Int64, ntrials)
             for i in 1:ntrials
-                position, head_direction,viewfield,movement,dist,texture,gaze,conjunction,gazem = trial(;rng=rng,Δθstep=Δθstep,fov=fov, p_stay=p_stay, p_hd=p_hd,binsize=binsize, binsize_wall=binsize_wall)
+                trial_data = trial(;rng=rng,Δθstep=Δθstep,fov=fov, p_stay=p_stay,
+                                   p_hd=p_hd,binsize=binsize, binsize_wall=binsize_wall,
+                                   return_labels=return_labels)
+                if return_labels
+                    position = trial_data.position
+                    head_direction = trial_data.head_direction
+                    viewfield = trial_data.view
+                    movement = trial_data.movement
+                    dist = trial_data.distance
+                    texture = trial_data.texture
+                    gaze = trial_data.gaze_rays
+                    conjunction = trial_data.conjunction
+                    gazem = trial_data.gaze
+                    nsteps = size(position, 2)
+                    place_bin[1:nsteps,i] .= trial_data.place_bin
+                    surface_bin[1:nsteps,i] .= trial_data.surface_bin
+                    joint_bin[1:nsteps,i] .= trial_data.joint_bin
+                    position_xy[:,1:nsteps,i] .= trial_data.position_xy
+                    gaze_xy[:,1:nsteps,i] .= trial_data.gaze_xy
+                    lengths[i] = nsteps
+                else
+                    position, head_direction,viewfield,movement,dist,texture,gaze,conjunction,gazem = trial_data
+                end
                 offset = 0
                 if :view in trial.inputs
                     input[offset+1:offset+size(viewfield,1), 1:size(viewfield,2),i]  .= viewfield
@@ -1510,6 +1684,10 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     input[offset+1:offset+size(movement,1), 1:size(movement,2),i]  .= movement
                     offset += size(movement,1)
                 end
+                if :position in trial.inputs
+                    input[offset+1:offset+size(position,1), 1:size(position,2),i] .= position
+                    offset += size(position,1)
+                end
                 if :distance in trial.inputs
                     input[offset+1:offset+size(dist,1), 1:size(dist,2),i]  .= dist 
                     offset += size(dist,1)
@@ -1519,7 +1697,7 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     offset += size(texture,1)
                 end
                 if :gaze in trial.inputs
-                    input[offset+1:offset+size(gaze,1), 1:size(gaze,2),i] .= texture 
+                    input[offset+1:offset+size(gaze,1), 1:size(gaze,2),i] .= gaze
                     offset += size(gaze,1)
                 end
 
@@ -1528,9 +1706,17 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     output[offset+1:offset+size(position,1), 1:size(position,2),i] .= position
                     offset += size(position,1)
                 end
-                if :head_direaction in trial.outputs
+                if :head_direction in trial.outputs
                     output[offset+1:offset+size(head_direction,1), 1:size(head_direction,2),i]  .= head_direction
                     offset += size(head_direction,1)
+                end
+                if :view in trial.outputs
+                    output[offset+1:offset+size(viewfield,1), 1:size(viewfield,2),i] .= viewfield
+                    offset += size(viewfield,1)
+                end
+                if :movement in trial.outputs
+                    output[offset+1:offset+size(movement,1), 1:size(movement,2),i] .= movement
+                    offset += size(movement,1)
                 end
                 if :distance in trial.outputs
                     output[offset+1:offset+size(dist,1), 1:size(dist,2),i]  .= dist 
@@ -1541,13 +1727,20 @@ function generate_trials(trial::NavigationTrial{T}, ntrials::Int64,dt; rng=Rando
                     offset += size(texture,1)
                 end
                 if :gaze in trial.outputs
-                    output[offset+1:offset+size(gazem,1), 1:size(gaze,2),i] .= gazem
+                    output[offset+1:offset+size(gazem,1), 1:size(gazem,2),i] .= gazem
                     offset += size(gazem,1)
                 end
                 if :conjunction in trial.outputs
                     output[offset+1:offset+size(conjunction,1), 1:size(conjunction,2), i] .= conjunction
+                    offset += size(conjunction,1)
                 end
                 output_mask[:,1:size(position,2),i] .= one(T)
+            end
+            if return_labels
+                labels = (place_bin=place_bin, surface_bin=surface_bin,
+                          joint_bin=joint_bin, position_xy=position_xy,
+                          gaze_xy=gaze_xy, lengths=lengths)
+                return input,output,output_mask,labels
             end
             input,output,output_mask
         end,NamedTuple(args), h)
